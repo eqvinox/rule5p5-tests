@@ -384,11 +384,30 @@ async def ws_handler(request):
     return ws
 
 
+async def ws_flow(request):
+    _logger.info(f"WS flow from %r", request.remote)
+
+    ws = web.WebSocketResponse()
+    await ws.prepare(request)
+
+    async for msg in ws:
+        if msg.type == aiohttp.WSMsgType.TEXT:
+            await ws.send_str("echo " + msg.data)
+        elif msg.type == aiohttp.WSMsgType.ERROR:
+            _logger.info(f"WS flow from %r closed with error", request.remote)
+            break
+        elif msg.type == aiohttp.WSMsgType.CLOSE:
+            _logger.info(f"WS flow from %r closed clean", request.remote)
+            break
+
+    return ws
+
 app = web.Application()
 app.add_routes([
     web.get('/', handle),
     web.get('/sink', handle_sink),
     web.get('/ws', ws_handler),
+    web.get('/flow', ws_flow),
     web.static('/static', os.path.dirname(os.path.abspath(__file__))),
 ])
 

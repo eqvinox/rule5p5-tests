@@ -14,9 +14,12 @@ socket.addEventListener("open", (event) => {
 	socket.send("init");
 });
 
+let ws_counter = 0;
+let ws_conns = new Object();
+
 socket.addEventListener("message", (event) => {
 	console.log("MSG: ", event.data);
-	if ((m = event.data.match(/connect (.*)/))) {
+	if ((m = event.data.match(/^connect (.*)/))) {
 		const url = m[1];
 		let req = new XMLHttpRequest();
 		req.onload = (e) => {
@@ -39,15 +42,45 @@ socket.addEventListener("message", (event) => {
 		console.log(`XHR send ${url}`);
 		journal_msg(`connecting ${url}`);
 		req.send();
-	} else if ((m = event.data.match(/message (.*)/))) {
+	} else if ((m = event.data.match(/^ws-connect (.*)/))) {
+		const url = m[1];
+
+		console.log(`WS connecting ${url}`);
+		journal_msg(`WS connecting ${url}`);
+
+		const wsock = new WebSocket(url);
+		let num = ++ws_counter;
+
+		ws_conns[num] = wsock;
+
+		wsock.addEventListener("open", (event) => {
+			socket.send(`ws-connected ${num} ${url}`);
+			console.log(`WS connected ${url}`);
+			journal_msg(`WS connected ${url}`);
+		});
+	} else if ((m = event.data.match(/^ws-send (.*)/))) {
+		const num = parseInt(m[1]);
+		const wsock = ws_conns(num);
+
+		console.log(`WS ping #${num}`);
+		journal_msg(`WS ping #${num}`);
+		wsock.send("ping");
+	} else if ((m = event.data.match(/^ws-close (.*)/))) {
+		const num = parseInt(m[1]);
+		const wsock = ws_conns(num);
+
+		console.log(`WS close #${num}`);
+		journal_msg(`WS close #${num}`);
+		wsock.close();
+	} else if ((m = event.data.match(/^message (.*)/))) {
 		const msg = m[1];
 		journal_msg(`message: ${msg}`).style.color = "#00c";
-	} else if ((m = event.data.match(/manual (.*)/))) {
+	} else if ((m = event.data.match(/^manual (.*)/))) {
 		const addr = m[1];
 		let manual = document.getElementById("manual");
 		manual.innerText = `please ssh/connect to ${addr}`;
 		manual.style.display = "block";
-	} else if ((m = event.data.match(/manual-clear/))) {
+	} else if ((m = event.data.match(/^manual-clear/))) {
 		let manual = document.getElementById("manual");
 		manual.innerText = "";
 		manual.style.display = "none";
