@@ -60,14 +60,14 @@ socket.addEventListener("message", (event) => {
 		});
 	} else if ((m = event.data.match(/^ws-send (.*)/))) {
 		const num = parseInt(m[1]);
-		const wsock = ws_conns(num);
+		const wsock = ws_conns[num];
 
 		console.log(`WS ping #${num}`);
 		journal_msg(`WS ping #${num}`);
 		wsock.send("ping");
 	} else if ((m = event.data.match(/^ws-close (.*)/))) {
 		const num = parseInt(m[1]);
-		const wsock = ws_conns(num);
+		const wsock = ws_conns[num];
 
 		console.log(`WS close #${num}`);
 		journal_msg(`WS close #${num}`);
@@ -84,6 +84,8 @@ socket.addEventListener("message", (event) => {
 		let manual = document.getElementById("manual");
 		manual.innerText = "";
 		manual.style.display = "none";
+	} else {
+		journal_msg(`unknown: ${event.data}`).style.color = "#f00";
 	}
 });
 
