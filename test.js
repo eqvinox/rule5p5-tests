@@ -39,6 +39,18 @@ socket.addEventListener("message", (event) => {
 		console.log(`XHR send ${url}`);
 		journal_msg(`connecting ${url}`);
 		req.send();
+	} else if ((m = event.data.match(/message (.*)/))) {
+		const msg = m[1];
+		journal_msg(`message: ${msg}`).style.color = "#00c";
+	} else if ((m = event.data.match(/manual (.*)/))) {
+		const addr = m[1];
+		let manual = document.getElementById("manual");
+		manual.innerText = `please ssh/connect to ${addr}`;
+		manual.style.display = "block";
+	} else if ((m = event.data.match(/manual-clear/))) {
+		let manual = document.getElementById("manual");
+		manual.innerText = "";
+		manual.style.display = "none";
 	}
 });
 

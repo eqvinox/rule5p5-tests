@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import ipaddress
 
 _logger = logging.getLogger(__name__)
 
@@ -11,12 +12,86 @@ from scapy.layers.inet6 import (
     ICMPv6NDOptPrefixInfo,
 )
 
+class PassFail:
+    def __init__(self, src=None, mac=None):
+        self.src = ipaddress.IPv6Network(src or "::/0")
+        self.mac = mac
+        self.explainer = ""
+
+    def explain(self, text):
+        self.explainer = text
+        return self
+
+    def __call__(self, src, mac):
+        if ipaddress.IPv6Address(src) not in self.src:
+            return False
+        if self.mac not in [None, mac]:
+            return False
+        return True
+
+class Pass(PassFail):
+    color = "\033[92;1mPASS\033[m"
+
+class Fail(PassFail):
+    color = "\033[91;1mFAIL\033[m"
+
+class Warn(PassFail):
+    color = "\033[94;1mWARN\033[m"
+
+
+manual_mode = True
+
+async def check(dut, addr, conds=[]):
+    dut.make_local(addr)
+
+    if manual_mode:
+        await dut._ws.send_str(f"manual {addr}")
+    else:
+        await dut._ws.send_str(f"connect http://[{addr}]/sink")
+
+    async def ws_wait():
+        result = await dut._ws.receive_str()
+        _logger.info("connect to %r: %r", addr, result)
+        return result
+
+    async def packet_watch():
+        while pkt := await dut.v6_packet():
+            ipv6 = pkt.getlayer(IPv6)
+            eth = pkt.getlayer(Ether)
+            if not (ipv6 and eth):
+                continue
+            if ipv6.dst == addr:
+                _logger.info("pkt %r -> %r used GW %r", ipv6.src, ipv6.dst, eth.dst)
+                return (ipv6.src, eth.dst)
+
+    gather = [packet_watch()]
+    if not manual_mode:
+        gather.append(ws_wait())
+    result = await asyncio.gather(*gather)
+    cond_match = None
+
+    if manual_mode:
+        await dut._ws.send_str(f"manual-clear")
+
+    for cond in conds:
+        if cond(*result[0]):
+            cond_match = cond
+            break
+
+    if cond_match is None:
+        _logger.info("\033[93;1munrecognized\033[m result: %r", result)
+    else:
+        _logger.info("%s: %r \033[97m%s\033[m", cond_match.color, result, cond_match.explainer)
+
+
 async def tc_basic_choice(dut):
     mac1 = dut.alloc_mac()
     ll1 = dut.create_ll(mac1)
 
     pkt = dut.ethhdr(mac1) / IPv6(src=ll1, dst="ff02::1")
-    pkt /= ICMPv6ND_RA(routerlifetime=300)
+    pkt /= ICMPv6ND_RA(
+        routerlifetime=300,
+    )
     pkt /= ICMPv6NDOptSrcLLAddr(lladdr=mac1)
     pkt /= ICMPv6NDOptPrefixInfo(
         validlifetime=600,
@@ -29,7 +104,10 @@ async def tc_basic_choice(dut):
     ll2 = dut.create_ll(mac2)
 
     pkt = dut.ethhdr(mac2) / IPv6(src=ll2, dst="ff02::1")
-    pkt /= ICMPv6ND_RA(routerlifetime=300)
+    pkt /= ICMPv6ND_RA(
+        routerlifetime=300,
+        prf="Low",
+    )
     pkt /= ICMPv6NDOptSrcLLAddr(lladdr=mac2)
     pkt /= ICMPv6NDOptPrefixInfo(
         validlifetime=600,
@@ -38,28 +116,45 @@ async def tc_basic_choice(dut):
     )
     dut.ipv6sock.send(pkt)
 
-    async def check(addr):
-        dut.make_local(addr)
+    await dut._ws.send_str(f"message 2.5s delay for DAD")
+    await asyncio.sleep(2.5)
 
-        await dut._ws.send_str(f"connect http://[{addr}]/sink")
+    await check(dut, "2001:db8:2226:3333::1", [
+        Pass(src="2001:db8:2226::/64", mac=mac1),
+        Fail(src="2001:db8:aaa6::/64", mac=mac2).explain("wrong gateway, used low preference (wrong) RA"),
+        Fail(src="2001:db8:2226::/64", mac=mac2).explain("wrong gateway for source"),
+        Fail(src="2001:db8:aaa6::/64", mac=mac1).explain("wrong gateway for source"),
+    ])
+    await check(dut, "2001:db8:aaa6:bbbb::1", [
+        Pass(src="2001:db8:2226::/64", mac=mac1).explain("suboptimal choice - required by RA prio"),
+        Fail(src="2001:db8:aaa6::/64", mac=mac2).explain("wrong gateway, used low preference (wrong) RA"),
+        Fail(src="2001:db8:aaa6::/64", mac=mac1).explain("wrong gateway for source"),
+        Fail(src="2001:db8:2226::/64", mac=mac2).explain("wrong gateway for source"),
+    ])
 
-        async def ws_wait():
-            result = await dut._ws.receive_str()
-            _logger.info("connect to %r: %r", addr, result)
-            return result
+    pkt = dut.ethhdr(mac1) / IPv6(src=ll1, dst="ff02::1")
+    pkt /= ICMPv6ND_RA(
+        routerlifetime=0,
+    )
+    pkt /= ICMPv6NDOptSrcLLAddr(lladdr=mac1)
+    pkt /= ICMPv6NDOptPrefixInfo(
+        validlifetime=600,
+        preferredlifetime=600,
+        prefix="2001:db8:2226::",
+    )
+    dut.ipv6sock.send(pkt)
 
-        async def packet_watch():
-            while pkt := await dut.v6_packet():
-                ipv6 = pkt.getlayer(IPv6)
-                eth = pkt.getlayer(Ether)
-                if not (ipv6 and eth):
-                    continue
-                if ipv6.dst == addr:
-                    _logger.info("pkt %r -> %r used GW %r", ipv6.src, ipv6.dst, eth.dst)
-                    return (ipv6.src, eth.dst)
+    await asyncio.sleep(0.5)
 
-        result = await asyncio.gather(ws_wait(), packet_watch())
-        _logger.info("result: %r", result)
-
-    await check("2001:db8:2226:3333::1")
-    await check("2001:db8:aaa6:bbbb::1")
+    await check(dut, "2001:db8:2226:3333::1", [
+        Pass(src="2001:db8:aaa6::/64", mac=mac2),
+        Fail(src="2001:db8:2226::/64", mac=mac1).explain("RA deprecation ignored"),
+        Fail(src="2001:db8:2226::/64", mac=mac2).explain("wrong gateway for source"),
+        Fail(src="2001:db8:aaa6::/64", mac=mac1).explain("wrong gateway for source"),
+    ])
+    await check(dut, "2001:db8:aaa6:bbbb::1", [
+        Pass(src="2001:db8:aaa6::/64", mac=mac2),
+        Fail(src="2001:db8:2226::/64", mac=mac1).explain("RA deprecation ignored"),
+        Fail(src="2001:db8:aaa6::/64", mac=mac1).explain("wrong gateway for source"),
+        Fail(src="2001:db8:2226::/64", mac=mac2).explain("wrong gateway for source"),
+    ])

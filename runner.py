@@ -8,6 +8,7 @@ import traceback
 import shlex
 import subprocess
 import random
+import time
 from pathlib import Path
 
 import scapy
@@ -288,7 +289,7 @@ class DUT:
 
         if announce:
             pkt = dut.ethhdr(mac) / IPv6(src=ll, dst="ff02::2")
-            pkt /= ICMPv6ND_NA(R=0, O=0, tgt=ll)
+            pkt /= ICMPv6ND_NA(R=1, O=0, tgt=ll)
             pkt /= ICMPv6NDOptDstLLAddr(lladdr=mac)
             self.ipv6sock.send(pkt)
 
@@ -305,7 +306,7 @@ class DUT:
             if use:
                 _logger.info("NS for local address %r, MAC %r", nd_ns.tgt, use["mac"])
                 pkt = self.ethhdr(use["mac"]) / IPv6(src=nd_ns.tgt, dst=v6.src)
-                pkt /= ICMPv6ND_NA(R=0, O=0, S=1, tgt=nd_ns.tgt)
+                pkt /= ICMPv6ND_NA(R=1, O=0, S=1, tgt=nd_ns.tgt)
                 pkt /= ICMPv6NDOptDstLLAddr(lladdr=use["mac"])
                 self.ipv6sock.send(pkt)
             else:
@@ -351,8 +352,9 @@ async def handle(request: web.Request):
 
     _logger.info(f"{ip4}: {dut!r} index")
 
-    text = """<html><head><title>saddr test</title></head><body>
-<script type="text/javascript" src="/static/test.js"></script>
+    text = f"""<html><head><title>saddr test</title></head><body>
+<script type="text/javascript" src="/static/test.js?t={time.time()}"></script>
+<div id="manual" style="display:none;background-color:#ff0;border:3px dotted #000;font-size:12pt;padding:6pt;margin:6pt;"></div>
 <pre id="journal"></pre>
 </body></html>"""
     rsp = web.Response(text=text, content_type="text/html")
