@@ -10,6 +10,7 @@ from scapy.layers.inet6 import (
     ICMPv6ND_RA,
     ICMPv6NDOptSrcLLAddr,
     ICMPv6NDOptPrefixInfo,
+    ICMPv6NDOptRouteInfo,
 )
 
 class PassFail:
@@ -143,37 +144,50 @@ async def ws_close(dut, num):
     if num is not None:
         await dut._ws.send_str(f"ws-close {num}")
 
-async def tc_basic_choice(dut):
+
+def deprecate_ra_lifetime_0(pkt):
+    newpkt = pkt.copy()
+    newpkt.getlayer(ICMPv6ND_RA).routerlifetime = 0
+    return newpkt
+
+def deprecate_pio_lifetime_0(pkt):
+    newpkt = pkt.copy()
+    pio = newpkt.getlayer(ICMPv6NDOptPrefixInfo)
+    pio.validlifetime = 0
+    pio.preferredlifetime = 0
+    return newpkt
+
+async def part1_basic(dut, deprecation_func):
     mac1 = dut.alloc_mac()
     ll1 = dut.create_ll(mac1)
 
-    pkt = dut.ethhdr(mac1) / IPv6(src=ll1, dst="ff02::1")
-    pkt /= ICMPv6ND_RA(
+    pkt1 = dut.ethhdr(mac1) / IPv6(src=ll1, dst="ff02::1")
+    pkt1 /= ICMPv6ND_RA(
         routerlifetime=300,
     )
-    pkt /= ICMPv6NDOptSrcLLAddr(lladdr=mac1)
-    pkt /= ICMPv6NDOptPrefixInfo(
+    pkt1 /= ICMPv6NDOptSrcLLAddr(lladdr=mac1)
+    pkt1 /= ICMPv6NDOptPrefixInfo(
         validlifetime=600,
         preferredlifetime=600,
         prefix="2001:db8:2226::",
     )
-    dut.ipv6sock.send(pkt)
+    dut.ipv6sock.send(pkt1)
 
     mac2 = dut.alloc_mac()
     ll2 = dut.create_ll(mac2)
 
-    pkt = dut.ethhdr(mac2) / IPv6(src=ll2, dst="ff02::1")
-    pkt /= ICMPv6ND_RA(
+    pkt2 = dut.ethhdr(mac2) / IPv6(src=ll2, dst="ff02::1")
+    pkt2 /= ICMPv6ND_RA(
         routerlifetime=300,
         prf="Low",
     )
-    pkt /= ICMPv6NDOptSrcLLAddr(lladdr=mac2)
-    pkt /= ICMPv6NDOptPrefixInfo(
+    pkt2 /= ICMPv6NDOptSrcLLAddr(lladdr=mac2)
+    pkt2 /= ICMPv6NDOptPrefixInfo(
         validlifetime=600,
         preferredlifetime=600,
         prefix="2001:db8:aaa6::",
     )
-    dut.ipv6sock.send(pkt)
+    dut.ipv6sock.send(pkt2)
 
     await dut._ws.send_str(f"message 2.5s delay for DAD")
     await asyncio.sleep(2.5)
@@ -193,17 +207,8 @@ async def tc_basic_choice(dut):
 
     _logger.info("%r: deprecating RA", dut)
 
-    pkt = dut.ethhdr(mac1) / IPv6(src=ll1, dst="ff02::1")
-    pkt /= ICMPv6ND_RA(
-        routerlifetime=0,
-    )
-    pkt /= ICMPv6NDOptSrcLLAddr(lladdr=mac1)
-    pkt /= ICMPv6NDOptPrefixInfo(
-        validlifetime=600,
-        preferredlifetime=600,
-        prefix="2001:db8:2226::",
-    )
-    dut.ipv6sock.send(pkt)
+    deprecated1 = deprecation_func(pkt1)
+    dut.ipv6sock.send(deprecated1)
 
     await asyncio.sleep(1.5)
     _logger.info("%r: deprecating RA - done sleeping", dut)
@@ -231,18 +236,7 @@ async def tc_basic_choice(dut):
     _, _, ws3 = await check(dut, "2001:db8:2226:3333::2", expectation, ws_possible=False)
     _, _, ws4 = await check(dut, "2001:db8:aaa6:bbbb::2", expectation, ws_possible=False)
 
-    pkt = dut.ethhdr(mac2) / IPv6(src=ll2, dst="ff02::1")
-    pkt /= ICMPv6ND_RA(
-        routerlifetime=300,
-        prf="Low",
-    )
-    pkt /= ICMPv6NDOptSrcLLAddr(lladdr=mac2)
-    pkt /= ICMPv6NDOptPrefixInfo(
-        validlifetime=600,
-        preferredlifetime=600,
-        prefix="2001:db8:aaa6::",
-    )
-    dut.ipv6sock.send(pkt)
+    dut.ipv6sock.send(pkt2)
 
     await dut._ws.send_str(f"message retrying with low-prio RA")
     await asyncio.sleep(0.5)
@@ -254,17 +248,7 @@ async def tc_basic_choice(dut):
 
     _logger.info("%r: reactivating RA", dut)
 
-    pkt = dut.ethhdr(mac1) / IPv6(src=ll1, dst="ff02::1")
-    pkt /= ICMPv6ND_RA(
-        routerlifetime=300,
-    )
-    pkt /= ICMPv6NDOptSrcLLAddr(lladdr=mac1)
-    pkt /= ICMPv6NDOptPrefixInfo(
-        validlifetime=600,
-        preferredlifetime=600,
-        prefix="2001:db8:2226::",
-    )
-    dut.ipv6sock.send(pkt)
+    dut.ipv6sock.send(pkt1)
 
     await dut._ws.send_str(f"message 2.5s delay for DAD")
     src1, _, ws5 = await check(dut, "2001:db8:2226:3333::1", [
@@ -286,3 +270,144 @@ async def tc_basic_choice(dut):
     await ws_close(dut, ws4)
     await ws_close(dut, ws5)
     await ws_close(dut, ws6)
+
+async def tc_basic_ra_life_0(dut):
+    """Units 1.1, 1.2 and 1.3 (1.3 incomplete)"""
+    return await part1_basic(dut, deprecate_ra_lifetime_0)
+
+async def tc_basic_pio_life_0(dut):
+    """Units 1.4 and 1.5"""
+    return await part1_basic(dut, deprecate_pio_lifetime_0)
+
+
+async def _tc_with_rio(dut):
+    mac1 = dut.alloc_mac()
+    ll1 = dut.create_ll(mac1)
+
+    pkt1 = dut.ethhdr(mac1) / IPv6(src=ll1, dst="ff02::1")
+    pkt1 /= ICMPv6ND_RA(
+        routerlifetime=300,
+    )
+    pkt1 /= ICMPv6NDOptSrcLLAddr(lladdr=mac1)
+    pkt1 /= ICMPv6NDOptPrefixInfo(
+        validlifetime=600,
+        preferredlifetime=600,
+        prefix="2001:db8:2226::",
+    )
+    dut.ipv6sock.send(pkt1)
+
+    mac2 = dut.alloc_mac()
+    ll2 = dut.create_ll(mac2)
+
+    pkt2 = dut.ethhdr(mac2) / IPv6(src=ll2, dst="ff02::1")
+    pkt2 /= ICMPv6ND_RA(
+        routerlifetime=300,
+        prf="Low",
+    )
+    pkt2 /= ICMPv6NDOptSrcLLAddr(lladdr=mac2)
+    pkt2 /= ICMPv6NDOptPrefixInfo(
+        validlifetime=600,
+        preferredlifetime=600,
+        prefix="2001:db8:aaa6::",
+    )
+    pkt2 /= ICMPv6NDOptRouteInfo(
+    )
+    dut.ipv6sock.send(pkt2)
+
+    await dut._ws.send_str(f"message 2.5s delay for DAD")
+    await asyncio.sleep(2.5)
+
+    src1, _, ws1 = await check(dut, "2001:db8:2226:3333::1", [
+        Pass(src="2001:db8:2226::/64", mac=mac1),
+        Fail(src="2001:db8:aaa6::/64", mac=mac2).explain("wrong gateway, used low preference (wrong) RA"),
+        Fail(src="2001:db8:2226::/64", mac=mac2).explain("wrong gateway for source"),
+        Fail(src="2001:db8:aaa6::/64", mac=mac1).explain("wrong gateway for source"),
+    ])
+    src2, _, ws2 = await check(dut, "2001:db8:aaa6:bbbb::1", [
+        Pass(src="2001:db8:2226::/64", mac=mac1).explain("suboptimal choice - required by RA prio"),
+        Fail(src="2001:db8:aaa6::/64", mac=mac2).explain("wrong gateway, used low preference (wrong) RA"),
+        Fail(src="2001:db8:aaa6::/64", mac=mac1).explain("wrong gateway for source"),
+        Fail(src="2001:db8:2226::/64", mac=mac2).explain("wrong gateway for source"),
+    ])
+
+
+async def tc_router_nud(dut):
+    """Units 3.x, incomplete"""
+
+    mac1 = dut.alloc_mac()
+    ll1 = dut.create_ll(mac1)
+
+    pkt1 = dut.ethhdr(mac1) / IPv6(src=ll1, dst="ff02::1")
+    pkt1 /= ICMPv6ND_RA(
+        routerlifetime=300,
+    )
+    pkt1 /= ICMPv6NDOptSrcLLAddr(lladdr=mac1)
+    pkt1 /= ICMPv6NDOptPrefixInfo(
+        validlifetime=600,
+        preferredlifetime=600,
+        prefix="2001:db8:2226::",
+    )
+    dut.ipv6sock.send(pkt1)
+
+    mac2 = dut.alloc_mac()
+    ll2 = dut.create_ll(mac2)
+
+    pkt2 = dut.ethhdr(mac2) / IPv6(src=ll2, dst="ff02::1")
+    pkt2 /= ICMPv6ND_RA(
+        routerlifetime=300,
+        prf="Low",
+    )
+    pkt2 /= ICMPv6NDOptSrcLLAddr(lladdr=mac2)
+    pkt2 /= ICMPv6NDOptPrefixInfo(
+        validlifetime=600,
+        preferredlifetime=600,
+        prefix="2001:db8:aaa6::",
+    )
+    dut.ipv6sock.send(pkt2)
+
+    await dut._ws.send_str(f"message 2.5s delay for DAD")
+    await asyncio.sleep(2.5)
+
+    src1, _, ws1 = await check(dut, "2001:db8:2226:3333::1", [
+        Pass(src="2001:db8:2226::/64", mac=mac1),
+        Fail(src="2001:db8:aaa6::/64", mac=mac2).explain("wrong gateway, used low preference (wrong) RA"),
+        Fail(src="2001:db8:2226::/64", mac=mac2).explain("wrong gateway for source"),
+        Fail(src="2001:db8:aaa6::/64", mac=mac1).explain("wrong gateway for source"),
+    ])
+    src2, _, ws2 = await check(dut, "2001:db8:aaa6:bbbb::1", [
+        Pass(src="2001:db8:2226::/64", mac=mac1).explain("suboptimal choice - required by RA prio"),
+        Fail(src="2001:db8:aaa6::/64", mac=mac2).explain("wrong gateway, used low preference (wrong) RA"),
+        Fail(src="2001:db8:aaa6::/64", mac=mac1).explain("wrong gateway for source"),
+        Fail(src="2001:db8:2226::/64", mac=mac2).explain("wrong gateway for source"),
+    ])
+
+    _logger.info(f"disabling NA replies for {ll1} & waiting")
+    del dut.local_addrs[ll1]
+
+    await dut._ws.send_str(f"message 35s wait on NUD")
+    await asyncio.sleep(35)
+    _logger.info(f"disabling NA replies for {ll1} & waiting: done")
+
+    src1, _, ws1 = await check(dut, "2001:db8:2226:3333::2", [
+        Fail(mac=mac1).explain("dead gateway"),
+        Pass(src="2001:db8:aaa6::/64", mac=mac2),
+        Fail(src="2001:db8:2226::/64", mac=mac2).explain("wrong gateway for source"),
+    ])
+    src2, _, ws2 = await check(dut, "2001:db8:aaa6:bbbb::2", [
+        Fail(mac=mac1).explain("dead gateway"),
+        Pass(src="2001:db8:aaa6::/64", mac=mac2),
+        Fail(src="2001:db8:2226::/64", mac=mac2).explain("wrong gateway for source"),
+    ])
+
+    await asyncio.sleep(8.5)
+
+    src1, _, ws1 = await check(dut, "2001:db8:2226:3333::3", [
+        Fail(mac=mac1).explain("dead gateway"),
+        Pass(src="2001:db8:aaa6::/64", mac=mac2),
+        Fail(src="2001:db8:2226::/64", mac=mac2).explain("wrong gateway for source"),
+    ])
+    src2, _, ws2 = await check(dut, "2001:db8:aaa6:bbbb::3", [
+        Fail(mac=mac1).explain("dead gateway"),
+        Pass(src="2001:db8:aaa6::/64", mac=mac2),
+        Fail(src="2001:db8:2226::/64", mac=mac2).explain("wrong gateway for source"),
+    ])

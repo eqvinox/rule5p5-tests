@@ -1,4 +1,6 @@
-const ws_url = document.URL.replace("http:", "ws:") + "ws";
+let ws_url = new URL(document.URL);
+ws_url.protocol = "ws:";
+ws_url.pathname = "/ws";
 const socket = new WebSocket(ws_url);
 
 function journal_msg(msg) {

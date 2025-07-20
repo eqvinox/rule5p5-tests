@@ -110,6 +110,7 @@ class DUT:
         self.ipv6_pkts = asyncio.Queue()
         self.state = "WS-WAIT"
         self.local_addrs = {}
+        self.requested_test = None
 
     def __repr__(self):
         return f"DUT(mac={self._mac!r}, ip4={self._ip4!r}, state={self.state!r})"
@@ -227,52 +228,27 @@ class DUT:
 
             _logger.info("%r: websocket up (%r)", self, init_msg)
 
-            done_tests = set()
+            try:
+                while True:
+                    self.ipv6_pkts.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
 
-            while True:
-                
-                try:
-                    while True:
-                        self.ipv6_pkts.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
+            tcs = get_testcases()
+            tc = self.requested_test
 
-                tcs = get_testcases()
-                candidates = set(tcs.keys()) - done_tests
-                _logger.info("%r: candidates for running: %r", self, candidates)
+            if tc not in tcs:
+                _logger.warning("%r: unknown test %r", self, tc)
+                return
 
-                if not candidates:
-                    _logger.info("%r: nothing left to run", self)
-                    break
+            tc_func = tcs[self.requested_test]
+            _logger.info("%r: running %r", self, tc)
 
-                tc = random.choice(list(candidates))
-                _logger.info("%r: running %r", self, tc)
-
-                tc_func = tcs[tc]
-
-                try:
-                    await tc_func(self)
-                except:
-                    _logger.error("testcase function exception:")
-                    traceback.print_exc()
-
-                done_tests.add(tc)
-
-        
-            #async for msg in ws:
-            #    print("msg: ", msg)
-            #    if msg.type == aiohttp.WSMsgType.TEXT:
-            #        if msg.data == 'close':
-            #            await ws.close()
-            #        else:
-            #            await ws.send_str(msg.data + '/answer')
-            #    elif msg.type == aiohttp.WSMsgType.ERROR:
-            #        print('ws connection closed with exception %s' %
-            #              ws.exception())
-            #        break
-        
-            #    await asyncio.sleep(1)
-            #    await ws.send_str(f"connect http://{runner_ip}/")
+            try:
+                await tc_func(self)
+            except:
+                _logger.error("testcase function exception:")
+                traceback.print_exc()
    
         finally:
             print('websocket connection closed')
@@ -346,15 +322,37 @@ class AsyncPackets:
         loop.add_reader(self._sock.ins, self._read)
 
 
+async def handle_index(request: web.Request):
+    tcs = get_testcases()
+
+    items = []
+    for name, func in tcs.items():
+        items.append(f'<div><a href="/test/{name}">{name}</a> {func.__doc__}</div>')
+    items = "\n".join(items)
+
+    text = f"""<html><head><title>saddr test</title>
+<link rel="stylesheet" type="text/css" href="/static/test.css"></head><body>
+<h1>index</h1>
+{items}
+</body></html>"""
+    rsp = web.Response(text=text, content_type="text/html")
+    rsp.headers["Access-Control-Allow-Origin"] = "*"
+    return rsp
+
 async def handle(request: web.Request):
+    test = request.match_info.get("test")
     ip4 = ipaddress.IPv4Address(request.remote)
     dut = DUT.by_ip4(ip4)
+    dut.requested_test = test
 
     _logger.info(f"{ip4}: {dut!r} index")
 
-    text = f"""<html><head><title>saddr test</title></head><body>
+    text = f"""<html><head><title>saddr test</title>
+<link rel="stylesheet" type="text/css" href="/static/test.css"></head><body>
 <script type="text/javascript" src="/static/test.js?t={time.time()}"></script>
-<div id="manual" style="display:none;background-color:#ff0;border:3px dotted #000;font-size:12pt;padding:6pt;margin:6pt;"></div>
+<h1>{test}</h1>
+<div><a href="/">back</a></div>
+<div id="manual"></div>
 <pre id="journal"></pre>
 </body></html>"""
     rsp = web.Response(text=text, content_type="text/html")
@@ -404,7 +402,8 @@ async def ws_flow(request):
 
 app = web.Application()
 app.add_routes([
-    web.get('/', handle),
+    web.get('/', handle_index),
+    web.get('/test/{test}', handle),
     web.get('/sink', handle_sink),
     web.get('/ws', ws_handler),
     web.get('/flow', ws_flow),
@@ -493,6 +492,7 @@ def net_setup(args):
 
     check_call(["ip", "addr", "flush", "scope", "global"])
     check_call(["ip", "addr", "add", f"{runner_ip}/32", "dev", "lo"])
+    check_call(["ip", "route", "replace", "2001:db8::/32", "dev", bridge])
 
     try:
         check_call(["nft", "flush", "table", "bridge", "filter"])
