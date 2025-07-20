@@ -77,6 +77,10 @@ socket.addEventListener("message", (event) => {
 	} else if ((m = event.data.match(/^message (.*)/))) {
 		const msg = m[1];
 		journal_msg(`message: ${msg}`).style.color = "#00c";
+	} else if ((m = event.data.match(/^passfail ([^ ]+) (.*)/))) {
+		const which = m[1];
+		const msg = m[2];
+		journal_msg(`${which}: ${msg}`).classList.add(`res-${which}`);
 	} else if ((m = event.data.match(/^manual (.*)/))) {
 		const addr = m[1];
 		let manual = document.getElementById("manual");

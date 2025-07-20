@@ -206,7 +206,7 @@ class DUT:
             dut_mac = cls._by_mac.get(mac)
 
             if dut_mac is None:
-                _logger.info("discarding packet from unknown MAC %r: %r", mac, pkt)
+                #_logger.info("discarding packet from unknown MAC %r: %r", mac, pkt)
                 continue
 
             await dut_mac.ipv6_pkts.put(pkt)
@@ -256,16 +256,18 @@ class DUT:
             self._ws = None
             self.state = "WS-WAIT"
 
-    def create_ll(self, mac, ll=None, announce=False):
+    def create_ll(self, mac, ll=None, announce=False, R=True):
         if ll is None:
             ll = self.alloc_ll()
         self.local_addrs[ll] = {
             "mac": mac,
+            "enabled": True,
+            "R": R,
         }
 
         if announce:
             pkt = dut.ethhdr(mac) / IPv6(src=ll, dst="ff02::2")
-            pkt /= ICMPv6ND_NA(R=1, O=0, tgt=ll)
+            pkt /= ICMPv6ND_NA(R=int(R), O=0, tgt=ll)
             pkt /= ICMPv6NDOptDstLLAddr(lladdr=mac)
             self.ipv6sock.send(pkt)
 
@@ -279,17 +281,27 @@ class DUT:
             v6 = pkt.getlayer(IPv6)
 
             use = self.local_addrs.get(nd_ns.tgt)
-            if use:
+            if use is None:
+                _logger.warning("NS for unknown address %r", nd_ns.tgt)
+            elif not use["enabled"]:
+                _logger.info("NS for local address %r - \033[33maddress is disabled for NA\033[m", nd_ns.tgt)
+            else:
                 _logger.info("NS for local address %r, MAC %r", nd_ns.tgt, use["mac"])
                 pkt = self.ethhdr(use["mac"]) / IPv6(src=nd_ns.tgt, dst=v6.src)
-                pkt /= ICMPv6ND_NA(R=1, O=0, S=1, tgt=nd_ns.tgt)
+                pkt /= ICMPv6ND_NA(R=int(use["R"]), O=0, S=1, tgt=nd_ns.tgt)
                 pkt /= ICMPv6NDOptDstLLAddr(lladdr=use["mac"])
                 self.ipv6sock.send(pkt)
-            else:
-                _logger.warning("NS for unknown address %r", nd_ns.tgt)
 
         # check IPv6 NA
         return pkt
+
+    async def sleep(self, duration: Optional[float]):
+        try:
+            async with asyncio.timeout(duration):
+                while True:
+                    await self.v6_packet()
+        except TimeoutError:
+            pass
 
     def make_local(self, addr):
         check_call(["ip", "route", "replace", "local", addr, "dev", DUT.info["bridge"]["name"]])
@@ -331,7 +343,7 @@ async def handle_index(request: web.Request):
     items = "\n".join(items)
 
     text = f"""<html><head><title>saddr test</title>
-<link rel="stylesheet" type="text/css" href="/static/test.css"></head><body>
+<link rel="stylesheet" type="text/css" href="/static/test.css?t={time.time()}"></head><body>
 <h1>index</h1>
 {items}
 </body></html>"""
@@ -348,7 +360,7 @@ async def handle(request: web.Request):
     _logger.info(f"{ip4}: {dut!r} index")
 
     text = f"""<html><head><title>saddr test</title>
-<link rel="stylesheet" type="text/css" href="/static/test.css"></head><body>
+<link rel="stylesheet" type="text/css" href="/static/test.css?t={time.time()}"></head><body>
 <script type="text/javascript" src="/static/test.js?t={time.time()}"></script>
 <h1>{test}</h1>
 <div><a href="/">back</a></div>
