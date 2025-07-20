@@ -1,0 +1,32 @@
+h1 {
+	font-size:16pt;
+}
+#manual {
+	display: none;
+	background-color: #ff0;
+	border: 3px dotted #000;
+	font-size: 12pt;
+	padding: 6pt;
+	margin: 6pt;
+}
+.res-pass,
+.res-fail,
+.res-warn {
+	padding-top:3pt;
+	padding-bottom:3pt;
+	margin-top:3pt;
+	margin-bottom:3pt;
+	font-weight: bold;
+}
+.res-pass {
+	background-color:#cfc;
+}
+.res-fail {
+	background-color:#f99;
+}
+.res-timeout {
+	background-color:#f9f;
+}
+.res-warn {
+	background-color:#ff9;
+}
