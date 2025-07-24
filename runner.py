@@ -506,6 +506,8 @@ def net_setup(args):
     check_call(["ip", "addr", "add", f"{runner_ip}/32", "dev", "lo"])
     check_call(["ip", "route", "replace", "2001:db8::/32", "dev", bridge])
 
+    check_call(["ip", "route", "replace", "0.0.0.0/0", "dev", bridge])
+
     try:
         check_call(["nft", "flush", "table", "bridge", "filter"])
     except subprocess.CalledProcessError:
