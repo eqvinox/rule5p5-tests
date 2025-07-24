@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: ISC -->
+
 # RFC6724 rule 5.5 + RFC8028 test tool
 
 ## How to run

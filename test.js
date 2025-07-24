@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 let ws_url = new URL(document.URL);
 ws_url.protocol = "ws:";
 ws_url.pathname = "/ws";
