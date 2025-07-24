@@ -39,7 +39,7 @@ bridges (like the additional two in the IETF test setup.)
 
 ## Caveats
 
-All IPv6 packets are unicast to the test device, even IPv6 multicast.  This is
+All IPv6 packets are L2/Ethernet unicast to the test device, even IPv6 multicast.  This is
 allowed by RFC6085 but may (unlikely) change some test outcome.
 
 The tests don't currently respond to router solicitations.  None of the
